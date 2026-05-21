@@ -149,9 +149,12 @@ pub fn parse_partner_login(input: &str, in_key: &[u8]) -> Result<PartnerLogin, R
     let result = envelope(input)?;
     let sync_time = required_str(&result, "syncTime")?;
     let decrypted = decrypt_hex(in_key, sync_time)?;
-    let timestamp = std::str::from_utf8(decrypted.get(4..).unwrap_or_default())
-        .map_err(|_| ResponseError::InvalidField("syncTime"))?
-        .trim_end_matches('\0')
+    let timestamp_text = std::str::from_utf8(decrypted.get(4..).unwrap_or_default())
+        .map_err(|_| ResponseError::InvalidField("syncTime"))?;
+    let timestamp = timestamp_text
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>()
         .parse::<i64>()
         .map_err(|_| ResponseError::InvalidField("syncTime"))?;
     let real_time = SystemTime::now()
@@ -530,11 +533,18 @@ fn required_str<'a>(value: &'a Value, key: &'static str) -> Result<&'a str, Resp
 }
 
 fn required_u32(value: &Value, key: &'static str) -> Result<u32, ResponseError> {
+    let Some(value) = value.get(key) else {
+        return Err(ResponseError::MissingField(key));
+    };
+
+    if let Some(number) = value.as_u64().and_then(|value| value.try_into().ok()) {
+        return Ok(number);
+    }
+
     value
-        .get(key)
-        .and_then(Value::as_u64)
-        .and_then(|value| value.try_into().ok())
-        .ok_or(ResponseError::MissingField(key))
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .ok_or(ResponseError::InvalidField(key))
 }
 
 fn bool_or(value: &Value, key: &'static str, default: bool) -> bool {
@@ -562,7 +572,7 @@ mod tests {
                 "result": {{
                     "syncTime": "{encrypted_sync}",
                     "partnerAuthToken": "partner-token",
-                    "partnerId": 7
+                    "partnerId": "7"
                 }}
             }}"#
         );

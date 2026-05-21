@@ -55,6 +55,10 @@ mod tests {
     #[test]
     fn encryption_round_trips_with_zero_padding() {
         let encrypted = encrypt_hex(b"6#26FRL$ZWD", r#"{"hello":"world"}"#).unwrap();
+        assert_eq!(
+            encrypted,
+            "ccc0a49a64193acb1750b799ab899a5dc10701e8f95a7cce"
+        );
         let decrypted = decrypt_hex(b"6#26FRL$ZWD", &encrypted).unwrap();
 
         assert!(decrypted.starts_with(br#"{"hello":"world"}"#));

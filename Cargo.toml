@@ -1,4 +1,3 @@
 [workspace]
-members = ["rust/pianobar-core"]
+members = ["rust/pianobar-cli", "rust/pianobar-core"]
 resolver = "2"
-
