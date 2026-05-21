@@ -1,0 +1,13 @@
+[package]
+name = "pianobar-cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "pianobar-rs"
+path = "src/main.rs"
+
+[dependencies]
+pianobar-core = { path = "../pianobar-core" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

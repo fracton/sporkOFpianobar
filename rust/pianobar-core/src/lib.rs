@@ -3,6 +3,7 @@ pub mod crypt;
 pub mod model;
 pub mod request;
 pub mod response;
+pub mod storage;
 
 pub use client::{ClientError, HttpConfig, PandoraClient};
 pub use model::{
@@ -18,4 +19,8 @@ pub use response::{
     parse_partner_login, parse_playlist, parse_search, parse_set_station_mode, parse_station_info,
     parse_station_modes, parse_stations, parse_user_login, ApiError, PartnerLogin, ResponseError,
     UserLogin,
+};
+pub use storage::{
+    download_song_assets, extension_from_url, sanitize_filename, song_file_stem, unique_path,
+    DownloadOptions, SavedAssets, StorageError,
 };
