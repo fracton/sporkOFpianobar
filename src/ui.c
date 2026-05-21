@@ -226,9 +226,9 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 	setAndCheck (CURLOPT_WRITEDATA, &buffer);
 	setAndCheck (CURLOPT_XFERINFOFUNCTION, progressCb);
 	setAndCheck (CURLOPT_XFERINFODATA, &lint);
-	setAndCheck (CURLOPT_NOPROGRESS, 0);
-	setAndCheck (CURLOPT_POST, 1);
-	setAndCheck (CURLOPT_TIMEOUT, settings->timeout);
+	setAndCheck (CURLOPT_NOPROGRESS, 0L);
+	setAndCheck (CURLOPT_POST, 1L);
+	setAndCheck (CURLOPT_TIMEOUT, (long) settings->timeout);
 	if (settings->caBundle != NULL) {
 		setAndCheck (CURLOPT_CAINFO, settings->caBundle);
 	}
@@ -1026,4 +1026,3 @@ void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song) {
 		PianoDestroyPlaylist (song);
 	}
 }
-
