@@ -216,6 +216,7 @@ Current live commands authenticate before running the requested operation::
 
 	cargo run -p pianobar-cli -- login
 	cargo run -p pianobar-cli -- stations
+	cargo run -p pianobar-cli -- search "Mazzy Star"
 	cargo run -p pianobar-cli -- playlist "Station Name" high
 	cargo run -p pianobar-cli -- playlist
 

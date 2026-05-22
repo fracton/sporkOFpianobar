@@ -77,6 +77,31 @@ async fn run() -> Result<(), CliError> {
                 );
             }
         }
+        CliCommand::Search { query } => {
+            let results = client
+                .search(&query)
+                .await
+                .map_err(|err| CliError::Operation {
+                    operation: "search",
+                    source: err,
+                })?;
+
+            for artist in results.artists {
+                println!(
+                    "artist\t{}\t{}",
+                    artist.music_id.as_deref().unwrap_or(""),
+                    artist.name.as_deref().unwrap_or("")
+                );
+            }
+            for song in results.songs {
+                println!(
+                    "song\t{}\t{}\t{}",
+                    song.music_id.as_deref().unwrap_or(""),
+                    song.artist.as_deref().unwrap_or(""),
+                    song.title.as_deref().unwrap_or("")
+                );
+            }
+        }
         CliCommand::Playlist { station, quality } => {
             let quality = quality.unwrap_or(config.audio_quality);
             let station_id = resolve_station_id(&client, &config, station.as_deref()).await?;
@@ -221,6 +246,9 @@ fn run_password_command(command: Option<&str>) -> Option<Result<String, CliError
 enum CliCommand {
     Login,
     Stations,
+    Search {
+        query: String,
+    },
     Playlist {
         station: Option<String>,
         quality: Option<AudioQuality>,
@@ -242,6 +270,10 @@ impl CliCommand {
                 }
                 Ok(Self::Login)
             }
+            Some("search") => {
+                let query = parse_required_text(args)?;
+                Ok(Self::Search { query })
+            }
             Some("playlist") => {
                 let (station, quality) = parse_station_and_quality(args)?;
                 Ok(Self::Playlist { station, quality })
@@ -256,6 +288,15 @@ impl CliCommand {
             }
             Some(_) => Err(CliError::Usage),
         }
+    }
+}
+
+fn parse_required_text(args: impl Iterator<Item = String>) -> Result<String, CliError> {
+    let query = args.collect::<Vec<_>>().join(" ");
+    if query.is_empty() {
+        Err(CliError::Usage)
+    } else {
+        Ok(query)
     }
 }
 
@@ -333,7 +374,7 @@ impl fmt::Display for CliError {
         match self {
             Self::Usage => write!(
                 f,
-                "usage: pianobar-rs [login|stations|playlist [station-id-or-name] [low|medium|high]|download-first [station-id-or-name] [low|medium|high] [output-dir]]"
+                "usage: pianobar-rs [login|stations|search <query>|playlist [station-id-or-name] [low|medium|high]|download-first [station-id-or-name] [low|medium|high] [output-dir]]"
             ),
             Self::MissingCredential(name) => write!(
                 f,
@@ -425,6 +466,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_search_command() {
+        assert_eq!(
+            CliCommand::from_args(["search", "mazzy", "star"].map(String::from).into_iter())
+                .unwrap(),
+            CliCommand::Search {
+                query: "mazzy star".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn parses_playlist_command() {
         assert_eq!(
             CliCommand::from_args(
@@ -500,6 +552,10 @@ mod tests {
     fn rejects_bad_usage() {
         assert!(matches!(
             CliCommand::from_args(["login", "extra"].map(String::from).into_iter()),
+            Err(CliError::Usage)
+        ));
+        assert!(matches!(
+            CliCommand::from_args(["search"].map(String::from).into_iter()),
             Err(CliError::Usage)
         ));
         assert!(matches!(
