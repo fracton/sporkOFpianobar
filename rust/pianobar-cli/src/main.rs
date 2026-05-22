@@ -1,6 +1,6 @@
 use pianobar_core::{
     download_song_assets, AudioQuality, ClientError, ConfigError, DownloadOptions, PandoraClient,
-    PianobarConfig, Session, StorageError,
+    PianobarConfig, Session, Station, StorageError,
 };
 use std::env;
 use std::error::Error;
@@ -47,6 +47,14 @@ async fn run() -> Result<(), CliError> {
             source: err,
         })?;
     match command {
+        CliCommand::Login => {
+            let user = client
+                .session()
+                .user
+                .as_ref()
+                .ok_or(CliError::Unauthenticated)?;
+            println!("listener\t{}", user.listener_id);
+        }
         CliCommand::Stations => {
             let stations = client
                 .get_stations()
@@ -69,11 +77,9 @@ async fn run() -> Result<(), CliError> {
                 );
             }
         }
-        CliCommand::Playlist {
-            station_id,
-            quality,
-        } => {
+        CliCommand::Playlist { station, quality } => {
             let quality = quality.unwrap_or(config.audio_quality);
+            let station_id = resolve_station_id(&client, &config, station.as_deref()).await?;
             let songs = client
                 .get_playlist(station_id.as_str(), quality)
                 .await
@@ -95,7 +101,7 @@ async fn run() -> Result<(), CliError> {
             }
         }
         CliCommand::DownloadFirst {
-            station_id,
+            station,
             quality,
             output_dir,
         } => {
@@ -103,6 +109,7 @@ async fn run() -> Result<(), CliError> {
             let output_dir = output_dir
                 .or(config.rec.clone())
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_DOWNLOAD_DIR));
+            let station_id = resolve_station_id(&client, &config, station.as_deref()).await?;
             let songs = client
                 .get_playlist(station_id.as_str(), quality)
                 .await
@@ -121,6 +128,39 @@ async fn run() -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+async fn resolve_station_id(
+    client: &PandoraClient,
+    config: &PianobarConfig,
+    requested: Option<&str>,
+) -> Result<String, CliError> {
+    let selector = requested
+        .map(str::to_string)
+        .or_else(|| config.autostart_station.clone())
+        .ok_or(CliError::MissingStation)?;
+    let stations = client
+        .get_stations()
+        .await
+        .map_err(|err| CliError::Operation {
+            operation: "get stations",
+            source: err,
+        })?;
+
+    find_station(&stations, &selector)
+        .map(|station| station.id.clone())
+        .ok_or(CliError::UnknownStation(selector))
+}
+
+fn find_station<'a>(stations: &'a [Station], selector: &str) -> Option<&'a Station> {
+    stations
+        .iter()
+        .find(|station| station.id == selector)
+        .or_else(|| {
+            stations
+                .iter()
+                .find(|station| station.name.as_deref() == Some(selector))
+        })
 }
 
 fn load_config() -> Result<PianobarConfig, CliError> {
@@ -179,13 +219,14 @@ fn run_password_command(command: Option<&str>) -> Option<Result<String, CliError
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CliCommand {
+    Login,
     Stations,
     Playlist {
-        station_id: String,
+        station: Option<String>,
         quality: Option<AudioQuality>,
     },
     DownloadFirst {
-        station_id: String,
+        station: Option<String>,
         quality: Option<AudioQuality>,
         output_dir: Option<PathBuf>,
     },
@@ -195,26 +236,20 @@ impl CliCommand {
     fn from_args(mut args: impl Iterator<Item = String>) -> Result<Self, CliError> {
         match args.next().as_deref() {
             None | Some("stations") => Ok(Self::Stations),
-            Some("playlist") => {
-                let station_id = args.next().ok_or(CliError::Usage)?;
-                let quality = parse_quality(args.next().as_deref())?;
+            Some("login") => {
                 if args.next().is_some() {
                     return Err(CliError::Usage);
                 }
-                Ok(Self::Playlist {
-                    station_id,
-                    quality,
-                })
+                Ok(Self::Login)
+            }
+            Some("playlist") => {
+                let (station, quality) = parse_station_and_quality(args)?;
+                Ok(Self::Playlist { station, quality })
             }
             Some("download-first") => {
-                let station_id = args.next().ok_or(CliError::Usage)?;
-                let quality = parse_quality(args.next().as_deref())?;
-                let output_dir = args.next().map(PathBuf::from);
-                if args.next().is_some() {
-                    return Err(CliError::Usage);
-                }
+                let (station, quality, output_dir) = parse_download_args(args)?;
                 Ok(Self::DownloadFirst {
-                    station_id,
+                    station,
                     quality,
                     output_dir,
                 })
@@ -222,6 +257,46 @@ impl CliCommand {
             Some(_) => Err(CliError::Usage),
         }
     }
+}
+
+fn parse_station_and_quality(
+    args: impl Iterator<Item = String>,
+) -> Result<(Option<String>, Option<AudioQuality>), CliError> {
+    let values: Vec<String> = args.collect();
+    match values.as_slice() {
+        [] => Ok((None, None)),
+        [one] if is_quality(one) => Ok((None, parse_quality(Some(one))?)),
+        [station] => Ok((Some(station.clone()), None)),
+        [station, quality] => Ok((Some(station.clone()), parse_quality(Some(quality))?)),
+        _ => Err(CliError::Usage),
+    }
+}
+
+fn parse_download_args(
+    args: impl Iterator<Item = String>,
+) -> Result<(Option<String>, Option<AudioQuality>, Option<PathBuf>), CliError> {
+    let values: Vec<String> = args.collect();
+    match values.as_slice() {
+        [] => Ok((None, None, None)),
+        [one] if is_quality(one) => Ok((None, parse_quality(Some(one))?, None)),
+        [station] => Ok((Some(station.clone()), None, None)),
+        [one, output_dir] if is_quality(one) => Ok((
+            None,
+            parse_quality(Some(one))?,
+            Some(PathBuf::from(output_dir)),
+        )),
+        [station, quality] => Ok((Some(station.clone()), parse_quality(Some(quality))?, None)),
+        [station, quality, output_dir] => Ok((
+            Some(station.clone()),
+            parse_quality(Some(quality))?,
+            Some(PathBuf::from(output_dir)),
+        )),
+        _ => Err(CliError::Usage),
+    }
+}
+
+fn is_quality(value: &str) -> bool {
+    matches!(value, "high" | "medium" | "low")
 }
 
 fn parse_quality(value: Option<&str>) -> Result<Option<AudioQuality>, CliError> {
@@ -238,6 +313,9 @@ fn parse_quality(value: Option<&str>) -> Result<Option<AudioQuality>, CliError> 
 enum CliError {
     Usage,
     MissingCredential(&'static str),
+    MissingStation,
+    UnknownStation(String),
+    Unauthenticated,
     PasswordCommandFailed,
     Config(ConfigError),
     NoSongs,
@@ -255,13 +333,19 @@ impl fmt::Display for CliError {
         match self {
             Self::Usage => write!(
                 f,
-                "usage: pianobar-rs [stations|playlist <station-id> [low|medium|high]|download-first <station-id> [low|medium|high] [output-dir]]"
+                "usage: pianobar-rs [login|stations|playlist [station-id-or-name] [low|medium|high]|download-first [station-id-or-name] [low|medium|high] [output-dir]]"
             ),
             Self::MissingCredential(name) => write!(
                 f,
                 "missing {name}; set it in config or with PIANOBAR_{}",
                 name.to_ascii_uppercase()
             ),
+            Self::MissingStation => write!(
+                f,
+                "missing station; pass a station id/name or set autostart_station in config"
+            ),
+            Self::UnknownStation(station) => write!(f, "station not found: {station}"),
+            Self::Unauthenticated => write!(f, "login succeeded without a user session"),
             Self::PasswordCommandFailed => write!(f, "password_command exited unsuccessfully"),
             Self::Config(err) => write!(f, "{err}"),
             Self::NoSongs => write!(f, "playlist did not contain any songs"),
@@ -278,6 +362,9 @@ impl Error for CliError {
         match self {
             Self::Usage => None,
             Self::MissingCredential(_) => None,
+            Self::MissingStation => None,
+            Self::UnknownStation(_) => None,
+            Self::Unauthenticated => None,
             Self::PasswordCommandFailed => None,
             Self::Config(err) => Some(err),
             Self::NoSongs => None,
@@ -330,6 +417,14 @@ mod tests {
     }
 
     #[test]
+    fn parses_login_command() {
+        assert_eq!(
+            CliCommand::from_args(["login"].map(String::from).into_iter()).unwrap(),
+            CliCommand::Login
+        );
+    }
+
+    #[test]
     fn parses_playlist_command() {
         assert_eq!(
             CliCommand::from_args(
@@ -339,19 +434,33 @@ mod tests {
             )
             .unwrap(),
             CliCommand::Playlist {
-                station_id: "station-id".to_string(),
+                station: Some("station-id".to_string()),
                 quality: Some(AudioQuality::Medium),
             }
         );
     }
 
     #[test]
-    fn parses_playlist_default_quality() {
+    fn parses_playlist_with_default_station_or_default_quality() {
         assert_eq!(
             CliCommand::from_args(["playlist", "station-id"].map(String::from).into_iter())
                 .unwrap(),
             CliCommand::Playlist {
-                station_id: "station-id".to_string(),
+                station: Some("station-id".to_string()),
+                quality: None,
+            }
+        );
+        assert_eq!(
+            CliCommand::from_args(["playlist", "high"].map(String::from).into_iter()).unwrap(),
+            CliCommand::Playlist {
+                station: None,
+                quality: Some(AudioQuality::High),
+            }
+        );
+        assert_eq!(
+            CliCommand::from_args(["playlist"].map(String::from).into_iter()).unwrap(),
+            CliCommand::Playlist {
+                station: None,
                 quality: None,
             }
         );
@@ -367,8 +476,21 @@ mod tests {
             )
             .unwrap(),
             CliCommand::DownloadFirst {
-                station_id: "station-id".to_string(),
+                station: Some("station-id".to_string()),
                 quality: Some(AudioQuality::Low),
+                output_dir: Some(PathBuf::from("/tmp/out")),
+            }
+        );
+        assert_eq!(
+            CliCommand::from_args(
+                ["download-first", "medium", "/tmp/out"]
+                    .map(String::from)
+                    .into_iter()
+            )
+            .unwrap(),
+            CliCommand::DownloadFirst {
+                station: None,
+                quality: Some(AudioQuality::Medium),
                 output_dir: Some(PathBuf::from("/tmp/out")),
             }
         );
@@ -377,12 +499,41 @@ mod tests {
     #[test]
     fn rejects_bad_usage() {
         assert!(matches!(
-            CliCommand::from_args(["playlist"].map(String::from).into_iter()),
+            CliCommand::from_args(["login", "extra"].map(String::from).into_iter()),
             Err(CliError::Usage)
         ));
         assert!(matches!(
             CliCommand::from_args(["nope"].map(String::from).into_iter()),
             Err(CliError::Usage)
         ));
+    }
+
+    #[test]
+    fn finds_station_by_id_or_name() {
+        let stations = vec![
+            Station {
+                id: "station-1".to_string(),
+                name: Some("Morning".to_string()),
+                is_creator: true,
+                is_quick_mix: false,
+                use_quick_mix: false,
+                seed_id: None,
+            },
+            Station {
+                id: "station-2".to_string(),
+                name: Some("Evening".to_string()),
+                is_creator: false,
+                is_quick_mix: false,
+                use_quick_mix: false,
+                seed_id: None,
+            },
+        ];
+
+        assert_eq!(
+            find_station(&stations, "station-1").unwrap().id,
+            "station-1"
+        );
+        assert_eq!(find_station(&stations, "Evening").unwrap().id, "station-2");
+        assert!(find_station(&stations, "missing").is_none());
     }
 }

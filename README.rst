@@ -200,6 +200,29 @@ Or install it to ``/usr/local`` by issuing::
 
 	gmake install
 
+Rust CLI
+--------
+
+The Rust replacement can be built and tested from the repository root::
+
+	cargo build
+	cargo test
+
+It reads the same default config path, ``$XDG_CONFIG_HOME/pianobar/config``,
+or a path supplied with ``PIANOBAR_CONFIG``. Credentials may also be supplied
+with ``PIANOBAR_USERNAME`` and ``PIANOBAR_PASSWORD``.
+
+Current live commands authenticate before running the requested operation::
+
+	cargo run -p pianobar-cli -- login
+	cargo run -p pianobar-cli -- stations
+	cargo run -p pianobar-cli -- playlist "Station Name" high
+	cargo run -p pianobar-cli -- playlist
+
+When no station is passed to ``playlist`` or ``download-first``, the CLI uses
+``autostart_station`` from the config. Station arguments may be station IDs or
+exact station names.
+
 FAQ
 ---
 
