@@ -232,15 +232,16 @@ pub fn parse_playlist(input: &str, quality: AudioQuality) -> Result<Vec<Song>, R
             ..Song::default()
         };
 
-        if let Some(audio) = item
-            .get("audioUrlMap")
-            .and_then(|map| map.get(quality.response_key()))
-        {
-            let encoding = required_str(audio, "encoding")?;
+        if let Some(audio_map) = item.get("audioUrlMap") {
+            let audio = audio_map
+                .get(quality.response_key())
+                .ok_or(ResponseError::QualityUnavailable)?;
+            let encoding = audio
+                .get("encoding")
+                .and_then(Value::as_str)
+                .ok_or(ResponseError::QualityUnavailable)?;
             song.audio_format = AudioFormat::from_encoding(encoding);
             song.audio_url = string(audio, "audioUrl");
-        } else {
-            return Err(ResponseError::QualityUnavailable);
         }
 
         playlist.push(song);
@@ -609,6 +610,27 @@ mod tests {
     }
 
     #[test]
+    fn station_list_allows_missing_array_and_defaults_flags_like_c_parser() {
+        let empty = parse_stations(r#"{"stat":"ok","result":{}}"#).unwrap();
+        assert!(empty.is_empty());
+
+        let stations = parse_stations(
+            r#"{
+                "stat": "ok",
+                "result": {
+                    "stations": [{"stationName": "Shared By Default", "stationToken": "s"}]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(stations.len(), 1);
+        assert!(!stations[0].is_creator);
+        assert!(!stations[0].is_quick_mix);
+        assert!(!stations[0].use_quick_mix);
+    }
+
+    #[test]
     fn parses_playlist_for_selected_quality() {
         let songs = parse_playlist(
             r#"{
@@ -646,9 +668,54 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_playlist_quality_is_an_error() {
+    fn playlist_skips_non_song_items_and_allows_missing_audio_map() {
+        let songs = parse_playlist(
+            r#"{
+                "stat": "ok",
+                "result": {
+                    "items": [
+                        {"adToken": "ad"},
+                        {
+                            "artistName": "Artist",
+                            "songName": "Song without audio map",
+                            "trackLength": 4294967297,
+                            "songRating": -1
+                        }
+                    ]
+                }
+            }"#,
+            AudioQuality::High,
+        )
+        .unwrap();
+
+        assert_eq!(songs.len(), 1);
+        assert_eq!(songs[0].title.as_deref(), Some("Song without audio map"));
+        assert!(songs[0].audio_url.is_none());
+        assert_eq!(songs[0].audio_format, AudioFormat::Unknown);
+        assert_eq!(songs[0].length, u32::MAX);
+        assert_eq!(songs[0].rating, SongRating::None);
+    }
+
+    #[test]
+    fn unavailable_playlist_quality_or_encoding_is_an_error() {
         let err = parse_playlist(
             r#"{"stat":"ok","result":{"items":[{"artistName":"Artist","audioUrlMap":{}}]}}"#,
+            AudioQuality::High,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ResponseError::QualityUnavailable));
+
+        let err = parse_playlist(
+            r#"{
+                "stat": "ok",
+                "result": {
+                    "items": [{
+                        "artistName": "Artist",
+                        "audioUrlMap": {"highQuality": {"audioUrl": "https://audio"}}
+                    }]
+                }
+            }"#,
             AudioQuality::High,
         )
         .unwrap_err();
@@ -671,6 +738,32 @@ mod tests {
 
         assert_eq!(result.artists[0].music_id.as_deref(), Some("artist-token"));
         assert_eq!(result.songs[0].music_id.as_deref(), Some("song-token"));
+    }
+
+    #[test]
+    fn genre_stations_allow_categories_without_station_arrays() {
+        let categories = parse_genre_stations(
+            r#"{
+                "stat": "ok",
+                "result": {
+                    "categories": [
+                        {"categoryName": "Empty"},
+                        {"categoryName": "Pop", "stations": [
+                            {"stationName": "Synth", "stationToken": "synth-token"}
+                        ]}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(categories.len(), 2);
+        assert_eq!(categories[0].name.as_deref(), Some("Empty"));
+        assert!(categories[0].genres.is_empty());
+        assert_eq!(
+            categories[1].genres[0].music_id.as_deref(),
+            Some("synth-token")
+        );
     }
 
     #[test]
@@ -708,6 +801,39 @@ mod tests {
     #[test]
     fn accepts_success_without_result_for_empty_responses() {
         parse_empty(r#"{"stat":"ok"}"#).unwrap();
+    }
+
+    #[test]
+    fn station_info_parses_feedback_defaults_and_missing_sections() {
+        let info = parse_station_info(
+            r#"{
+                "stat": "ok",
+                "result": {
+                    "music": {
+                        "songs": [{"songName": "Seed Song", "artistName": "Seed Artist", "seedId": "seed-song"}],
+                        "artists": [{"artistName": "Seed Artist", "seedId": "seed-artist"}]
+                    },
+                    "feedback": {
+                        "thumbsUp": [{"songName": "Loved", "isPositive": true, "trackLength": 10}],
+                        "thumbsDown": [{"songName": "Banned"}]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(info.song_seeds[0].seed_id.as_deref(), Some("seed-song"));
+        assert_eq!(info.artist_seeds[0].seed_id.as_deref(), Some("seed-artist"));
+        assert_eq!(info.feedback.len(), 2);
+        assert_eq!(info.feedback[0].rating, SongRating::Love);
+        assert_eq!(info.feedback[0].length, 10);
+        assert_eq!(info.feedback[1].rating, SongRating::Ban);
+        assert_eq!(info.feedback[1].length, 0);
+
+        let empty = parse_station_info(r#"{"stat":"ok","result":{}}"#).unwrap();
+        assert!(empty.song_seeds.is_empty());
+        assert!(empty.artist_seeds.is_empty());
+        assert!(empty.feedback.is_empty());
     }
 
     #[test]
