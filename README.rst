@@ -6,6 +6,15 @@ online radio Pandora_.
 
 .. _Pandora: http://www.pandora.com
 
+Project status
+--------------
+
+This fork is moving toward a Rust implementation. The Rust workspace under
+``rust/`` is the replacement path for new development. The existing C sources
+under ``src/`` are still buildable and useful as a behavior reference, but they
+are legacy code and are expected to be removed once the Rust client reaches
+feature parity.
+
 .. image:: https://6xq.net/pianobar/pianobar-screenshot.png
     :target: https://6xq.net/pianobar/pianobar-screenshot.png
     :alt: pianobar screenshot
@@ -255,4 +264,3 @@ PandoraBar_
 
 .. _PandoraBar: https://hackaday.com/2012/09/20/how-to-build-your-own-dedicated-pandora-radio/
 .. _Pandora’s Box: http://www.instructables.com/id/Pandoras-Box-An-Internet-Radio-player-made-with/
-
