@@ -1,17 +1,21 @@
 use pianobar_core::{
-    download_song_assets, AudioQuality, ClientError, ConfigError, CreateStation, CreateStationKind,
-    DownloadOptions, PandoraClient, PianobarConfig, RenameStation, Session, Station, StorageError,
+    download_song_assets, sanitize_filename, AudioQuality, ClientError, ConfigError, CreateStation,
+    CreateStationKind, DownloadOptions, PandoraClient, PianobarConfig, RenameStation, Session,
+    Song, SongRating, Station, StorageError,
 };
+use std::collections::HashSet;
 use std::env;
 use std::error::Error;
 use std::fmt;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
 
 const CONFIG_ENV: &str = "PIANOBAR_CONFIG";
 const USER_ENV: &str = "PIANOBAR_USERNAME";
 const PASSWORD_ENV: &str = "PIANOBAR_PASSWORD";
 const DEFAULT_DOWNLOAD_DIR: &str = "pianobar-rs-downloads";
+const DEFAULT_EXPORT_DIR: &str = "pianobar-rs-export";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -170,6 +174,9 @@ async fn run() -> Result<(), CliError> {
                 })?;
             println!("deleted\t{station_id}");
         }
+        CliCommand::Export { output_dir } => {
+            export_station_playlists(&client, &output_dir).await?;
+        }
         CliCommand::Playlist { station, quality } => {
             let quality = quality.unwrap_or(config.audio_quality);
             let station_id = resolve_station_id(&client, &config, station.as_deref()).await?;
@@ -221,6 +228,152 @@ async fn run() -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+async fn export_station_playlists(
+    client: &PandoraClient,
+    output_dir: &Path,
+) -> Result<(), CliError> {
+    fs::create_dir_all(output_dir)?;
+    let stations = client
+        .get_stations()
+        .await
+        .map_err(|err| CliError::Operation {
+            operation: "get stations",
+            source: err,
+        })?;
+
+    let mut exported_paths = HashSet::new();
+    for station in stations {
+        if station.is_quick_mix {
+            continue;
+        }
+
+        let info = client
+            .get_station_info(station.id.as_str())
+            .await
+            .map_err(|err| CliError::Operation {
+                operation: "get station info",
+                source: err,
+            })?;
+        let songs = export_songs(info.song_seeds, info.feedback);
+        if songs.is_empty() {
+            println!("skipped\t{}\t0", station.id);
+            continue;
+        }
+
+        let name = station.name.as_deref().unwrap_or("(unnamed)");
+        let path = export_playlist_path(output_dir, name, &station.id, &mut exported_paths);
+        fs::write(&path, xspf_playlist(name, &songs))?;
+        println!(
+            "exported\t{}\t{}\t{}",
+            station.id,
+            songs.len(),
+            path.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn export_playlist_path(
+    output_dir: &Path,
+    station_name: &str,
+    station_id: &str,
+    exported_paths: &mut HashSet<PathBuf>,
+) -> PathBuf {
+    let stem = sanitize_filename(station_name);
+    let path = output_dir.join(format!("{stem}.xspf"));
+    if exported_paths.insert(path.clone()) {
+        return path;
+    }
+
+    let fallback = output_dir.join(format!("{stem} ({station_id}).xspf"));
+    exported_paths.insert(fallback.clone());
+    fallback
+}
+
+fn export_songs(seed_songs: Vec<Song>, feedback: Vec<Song>) -> Vec<ExportSong> {
+    let mut seen = HashSet::new();
+    let mut songs = Vec::new();
+
+    for song in seed_songs {
+        push_export_song(&mut songs, &mut seen, song, "seed song");
+    }
+    for song in feedback
+        .into_iter()
+        .filter(|song| song.rating == SongRating::Love)
+    {
+        push_export_song(&mut songs, &mut seen, song, "liked song");
+    }
+
+    songs
+}
+
+fn push_export_song(
+    songs: &mut Vec<ExportSong>,
+    seen: &mut HashSet<(String, String)>,
+    song: Song,
+    source: &'static str,
+) {
+    let artist = song.artist.unwrap_or_default();
+    let title = song.title.unwrap_or_default();
+    if artist.is_empty() && title.is_empty() {
+        return;
+    }
+    if seen.insert((artist.clone(), title.clone())) {
+        songs.push(ExportSong {
+            artist,
+            title,
+            source,
+        });
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ExportSong {
+    artist: String,
+    title: String,
+    source: &'static str,
+}
+
+fn xspf_playlist(name: &str, songs: &[ExportSong]) -> String {
+    let mut out = String::from(r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+    out.push_str("\n<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\">\n");
+    out.push_str("  <title>");
+    out.push_str(&xml_escape(name));
+    out.push_str("</title>\n  <trackList>\n");
+    for song in songs {
+        out.push_str("    <track>\n");
+        out.push_str("      <title>");
+        out.push_str(&xml_escape(&song.title));
+        out.push_str("</title>\n");
+        if !song.artist.is_empty() {
+            out.push_str("      <creator>");
+            out.push_str(&xml_escape(&song.artist));
+            out.push_str("</creator>\n");
+        }
+        out.push_str("      <annotation>");
+        out.push_str(song.source);
+        out.push_str("</annotation>\n");
+        out.push_str("    </track>\n");
+    }
+    out.push_str("  </trackList>\n</playlist>\n");
+    out
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| match ch {
+            '&' => "&amp;".chars().collect::<Vec<_>>(),
+            '<' => "&lt;".chars().collect(),
+            '>' => "&gt;".chars().collect(),
+            '"' => "&quot;".chars().collect(),
+            '\'' => "&apos;".chars().collect(),
+            _ => vec![ch],
+        })
+        .collect()
 }
 
 async fn resolve_station_id(
@@ -344,6 +497,9 @@ enum CliCommand {
     DeleteStation {
         station: String,
     },
+    Export {
+        output_dir: PathBuf,
+    },
     Playlist {
         station: Option<String>,
         quality: Option<AudioQuality>,
@@ -389,6 +545,16 @@ impl CliCommand {
             Some("delete-station") => {
                 let station = parse_required_text(args)?;
                 Ok(Self::DeleteStation { station })
+            }
+            Some("export") => {
+                let output_dir = match args.next() {
+                    Some(path) => PathBuf::from(path),
+                    None => PathBuf::from(DEFAULT_EXPORT_DIR),
+                };
+                if args.next().is_some() {
+                    return Err(CliError::Usage);
+                }
+                Ok(Self::Export { output_dir })
             }
             Some("playlist") => {
                 let (station, quality) = parse_station_and_quality(args)?;
@@ -508,7 +674,7 @@ impl fmt::Display for CliError {
         match self {
             Self::Usage => write!(
                 f,
-                "usage: pianobar-rs [login|stations|search <query>|station-info [station-id-or-name]|create-station <music|song|artist> <token>|rename-station <station-id> <new-name>|delete-station <station-id-or-name>|playlist [station-id-or-name] [low|medium|high]|download-first [station-id-or-name] [low|medium|high] [output-dir]]"
+                "usage: pianobar-rs [login|stations|search <query>|station-info [station-id-or-name]|create-station <music|song|artist> <token>|rename-station <station-id> <new-name>|delete-station <station-id-or-name>|export [output-dir]|playlist [station-id-or-name] [low|medium|high]|download-first [station-id-or-name] [low|medium|high] [output-dir]]"
             ),
             Self::MissingCredential(name) => write!(
                 f,
@@ -669,6 +835,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_export_command() {
+        assert_eq!(
+            CliCommand::from_args(["export"].map(String::from).into_iter()).unwrap(),
+            CliCommand::Export {
+                output_dir: PathBuf::from(DEFAULT_EXPORT_DIR),
+            }
+        );
+        assert_eq!(
+            CliCommand::from_args(
+                ["export", "/tmp/pianobar-export"]
+                    .map(String::from)
+                    .into_iter()
+            )
+            .unwrap(),
+            CliCommand::Export {
+                output_dir: PathBuf::from("/tmp/pianobar-export"),
+            }
+        );
+    }
+
+    #[test]
     fn parses_playlist_command() {
         assert_eq!(
             CliCommand::from_args(
@@ -763,6 +950,10 @@ mod tests {
             Err(CliError::Usage)
         ));
         assert!(matches!(
+            CliCommand::from_args(["export", "one", "two"].map(String::from).into_iter()),
+            Err(CliError::Usage)
+        ));
+        assert!(matches!(
             CliCommand::from_args(["nope"].map(String::from).into_iter()),
             Err(CliError::Usage)
         ));
@@ -795,5 +986,77 @@ mod tests {
         );
         assert_eq!(find_station(&stations, "Evening").unwrap().id, "station-2");
         assert!(find_station(&stations, "missing").is_none());
+    }
+
+    #[test]
+    fn export_songs_include_seed_and_loved_feedback_only_once() {
+        let seed = Song {
+            artist: Some("Artist".to_string()),
+            title: Some("Seed".to_string()),
+            ..Song::default()
+        };
+        let duplicate_love = Song {
+            artist: Some("Artist".to_string()),
+            title: Some("Seed".to_string()),
+            rating: SongRating::Love,
+            ..Song::default()
+        };
+        let love = Song {
+            artist: Some("Other".to_string()),
+            title: Some("Loved".to_string()),
+            rating: SongRating::Love,
+            ..Song::default()
+        };
+        let ban = Song {
+            artist: Some("Nope".to_string()),
+            title: Some("Banned".to_string()),
+            rating: SongRating::Ban,
+            ..Song::default()
+        };
+
+        let songs = export_songs(vec![seed], vec![duplicate_love, love, ban]);
+
+        assert_eq!(
+            songs,
+            vec![
+                ExportSong {
+                    artist: "Artist".to_string(),
+                    title: "Seed".to_string(),
+                    source: "seed song",
+                },
+                ExportSong {
+                    artist: "Other".to_string(),
+                    title: "Loved".to_string(),
+                    source: "liked song",
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn export_playlist_paths_are_station_named_and_collision_safe() {
+        let mut paths = HashSet::new();
+
+        let first = export_playlist_path(Path::new("/tmp/export"), "AC/DC Radio", "1", &mut paths);
+        let second = export_playlist_path(Path::new("/tmp/export"), "AC:DC Radio", "2", &mut paths);
+
+        assert_eq!(first, PathBuf::from("/tmp/export/AC_DC Radio.xspf"));
+        assert_eq!(second, PathBuf::from("/tmp/export/AC_DC Radio (2).xspf"));
+    }
+
+    #[test]
+    fn xspf_playlist_escapes_metadata() {
+        let playlist = xspf_playlist(
+            "A&B <Station>",
+            &[ExportSong {
+                artist: "Artist \"Name\"".to_string(),
+                title: "Song's <Title>".to_string(),
+                source: "seed song",
+            }],
+        );
+
+        assert!(playlist.contains("<title>A&amp;B &lt;Station&gt;</title>"));
+        assert!(playlist.contains("<title>Song&apos;s &lt;Title&gt;</title>"));
+        assert!(playlist.contains("<creator>Artist &quot;Name&quot;</creator>"));
     }
 }

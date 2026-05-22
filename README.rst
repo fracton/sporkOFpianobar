@@ -221,6 +221,7 @@ Current live commands authenticate before running the requested operation::
 	cargo run -p pianobar-cli -- rename-station 123456789 "New Station Name"
 	cargo run -p pianobar-cli -- delete-station "New Station Name"
 	cargo run -p pianobar-cli -- station-info "Station Name"
+	cargo run -p pianobar-cli -- export playlists
 	cargo run -p pianobar-cli -- playlist "Station Name" high
 	cargo run -p pianobar-cli -- playlist
 
@@ -230,6 +231,11 @@ arguments may be station IDs or exact station names.
 
 ``delete-station`` is destructive. For tests and smoke checks, only delete a
 station created specifically for that test run.
+
+``export`` writes one ``.xspf`` playlist per non-QuickMix station. Each
+playlist is named after the station and contains song seeds plus songs with
+positive feedback from that station's info. Stations with no exportable songs
+are skipped; duplicate sanitized names get the station ID appended.
 
 FAQ
 ---
