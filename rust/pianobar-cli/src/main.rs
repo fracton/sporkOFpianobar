@@ -1,6 +1,6 @@
 use pianobar_core::{
-    download_song_assets, AudioQuality, ClientError, ConfigError, DownloadOptions, PandoraClient,
-    PianobarConfig, Session, Station, StorageError,
+    download_song_assets, AudioQuality, ClientError, ConfigError, CreateStation, CreateStationKind,
+    DownloadOptions, PandoraClient, PianobarConfig, RenameStation, Session, Station, StorageError,
 };
 use std::env;
 use std::error::Error;
@@ -65,16 +65,7 @@ async fn run() -> Result<(), CliError> {
                 })?;
 
             for station in stations {
-                println!(
-                    "{}\t{}{}",
-                    station.id,
-                    station.name.unwrap_or_else(|| "(unnamed)".to_string()),
-                    if station.is_quick_mix {
-                        "\tquickmix"
-                    } else {
-                        ""
-                    }
-                );
+                print_station(&station);
             }
         }
         CliCommand::Search { query } => {
@@ -101,6 +92,83 @@ async fn run() -> Result<(), CliError> {
                     song.title.as_deref().unwrap_or("")
                 );
             }
+        }
+        CliCommand::StationInfo { station } => {
+            let station_id = resolve_station_id(&client, &config, station.as_deref()).await?;
+            let info = client
+                .get_station_info(station_id.as_str())
+                .await
+                .map_err(|err| CliError::Operation {
+                    operation: "get station info",
+                    source: err,
+                })?;
+
+            for song in info.song_seeds {
+                println!(
+                    "song-seed\t{}\t{}\t{}",
+                    song.seed_id.as_deref().unwrap_or(""),
+                    song.artist.as_deref().unwrap_or(""),
+                    song.title.as_deref().unwrap_or("")
+                );
+            }
+            for artist in info.artist_seeds {
+                println!(
+                    "artist-seed\t{}\t{}",
+                    artist.seed_id.as_deref().unwrap_or(""),
+                    artist.name.as_deref().unwrap_or("")
+                );
+            }
+            for station in info.station_seeds {
+                println!(
+                    "station-seed\t{}\t{}",
+                    station.id,
+                    station.name.as_deref().unwrap_or("")
+                );
+            }
+            for song in info.feedback {
+                println!(
+                    "feedback\t{}\t{:?}\t{}\t{}",
+                    song.feedback_id.as_deref().unwrap_or(""),
+                    song.rating,
+                    song.artist.as_deref().unwrap_or(""),
+                    song.title.as_deref().unwrap_or("")
+                );
+            }
+        }
+        CliCommand::CreateStation { kind, token } => {
+            let station = client
+                .create_station(CreateStation { token, kind })
+                .await
+                .map_err(|err| CliError::Operation {
+                    operation: "create station",
+                    source: err,
+                })?;
+            print_station(&station);
+        }
+        CliCommand::RenameStation { station, new_name } => {
+            let station_id = resolve_station_id(&client, &config, Some(&station)).await?;
+            client
+                .rename_station(RenameStation {
+                    station_id: station_id.clone(),
+                    new_name,
+                })
+                .await
+                .map_err(|err| CliError::Operation {
+                    operation: "rename station",
+                    source: err,
+                })?;
+            println!("renamed\t{station_id}");
+        }
+        CliCommand::DeleteStation { station } => {
+            let station_id = resolve_station_id(&client, &config, Some(&station)).await?;
+            client
+                .delete_station(station_id.as_str())
+                .await
+                .map_err(|err| CliError::Operation {
+                    operation: "delete station",
+                    source: err,
+                })?;
+            println!("deleted\t{station_id}");
         }
         CliCommand::Playlist { station, quality } => {
             let quality = quality.unwrap_or(config.audio_quality);
@@ -177,6 +245,19 @@ async fn resolve_station_id(
         .ok_or(CliError::UnknownStation(selector))
 }
 
+fn print_station(station: &Station) {
+    println!(
+        "{}\t{}{}",
+        station.id,
+        station.name.as_deref().unwrap_or("(unnamed)"),
+        if station.is_quick_mix {
+            "\tquickmix"
+        } else {
+            ""
+        }
+    );
+}
+
 fn find_station<'a>(stations: &'a [Station], selector: &str) -> Option<&'a Station> {
     stations
         .iter()
@@ -249,6 +330,20 @@ enum CliCommand {
     Search {
         query: String,
     },
+    StationInfo {
+        station: Option<String>,
+    },
+    CreateStation {
+        kind: CreateStationKind,
+        token: String,
+    },
+    RenameStation {
+        station: String,
+        new_name: String,
+    },
+    DeleteStation {
+        station: String,
+    },
     Playlist {
         station: Option<String>,
         quality: Option<AudioQuality>,
@@ -274,6 +369,27 @@ impl CliCommand {
                 let query = parse_required_text(args)?;
                 Ok(Self::Search { query })
             }
+            Some("station-info") => {
+                let station = parse_optional_text(args);
+                Ok(Self::StationInfo { station })
+            }
+            Some("create-station") => {
+                let kind = parse_create_station_kind(args.next().as_deref())?;
+                let token = args.next().ok_or(CliError::Usage)?;
+                if args.next().is_some() {
+                    return Err(CliError::Usage);
+                }
+                Ok(Self::CreateStation { kind, token })
+            }
+            Some("rename-station") => {
+                let station = args.next().ok_or(CliError::Usage)?;
+                let new_name = parse_required_text(args)?;
+                Ok(Self::RenameStation { station, new_name })
+            }
+            Some("delete-station") => {
+                let station = parse_required_text(args)?;
+                Ok(Self::DeleteStation { station })
+            }
             Some("playlist") => {
                 let (station, quality) = parse_station_and_quality(args)?;
                 Ok(Self::Playlist { station, quality })
@@ -288,6 +404,24 @@ impl CliCommand {
             }
             Some(_) => Err(CliError::Usage),
         }
+    }
+}
+
+fn parse_create_station_kind(value: Option<&str>) -> Result<CreateStationKind, CliError> {
+    match value {
+        Some("music") => Ok(CreateStationKind::MusicToken),
+        Some("song") => Ok(CreateStationKind::Song),
+        Some("artist") => Ok(CreateStationKind::Artist),
+        _ => Err(CliError::Usage),
+    }
+}
+
+fn parse_optional_text(args: impl Iterator<Item = String>) -> Option<String> {
+    let value = args.collect::<Vec<_>>().join(" ");
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }
 
@@ -374,7 +508,7 @@ impl fmt::Display for CliError {
         match self {
             Self::Usage => write!(
                 f,
-                "usage: pianobar-rs [login|stations|search <query>|playlist [station-id-or-name] [low|medium|high]|download-first [station-id-or-name] [low|medium|high] [output-dir]]"
+                "usage: pianobar-rs [login|stations|search <query>|station-info [station-id-or-name]|create-station <music|song|artist> <token>|rename-station <station-id> <new-name>|delete-station <station-id-or-name>|playlist [station-id-or-name] [low|medium|high]|download-first [station-id-or-name] [low|medium|high] [output-dir]]"
             ),
             Self::MissingCredential(name) => write!(
                 f,
@@ -477,6 +611,64 @@ mod tests {
     }
 
     #[test]
+    fn parses_station_info_command() {
+        assert_eq!(
+            CliCommand::from_args(["station-info"].map(String::from).into_iter()).unwrap(),
+            CliCommand::StationInfo { station: None }
+        );
+        assert_eq!(
+            CliCommand::from_args(
+                ["station-info", "No", "Surprises", "Radio"]
+                    .map(String::from)
+                    .into_iter()
+            )
+            .unwrap(),
+            CliCommand::StationInfo {
+                station: Some("No Surprises Radio".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_station_management_commands() {
+        assert_eq!(
+            CliCommand::from_args(
+                ["create-station", "music", "R1897"]
+                    .map(String::from)
+                    .into_iter()
+            )
+            .unwrap(),
+            CliCommand::CreateStation {
+                kind: CreateStationKind::MusicToken,
+                token: "R1897".to_string(),
+            }
+        );
+        assert_eq!(
+            CliCommand::from_args(
+                ["rename-station", "station-id", "Temporary", "Name"]
+                    .map(String::from)
+                    .into_iter()
+            )
+            .unwrap(),
+            CliCommand::RenameStation {
+                station: "station-id".to_string(),
+                new_name: "Temporary Name".to_string(),
+            }
+        );
+        assert_eq!(
+            CliCommand::from_args(
+                ["delete-station", "Temporary", "Name"]
+                    .map(String::from)
+                    .into_iter()
+            )
+            .unwrap(),
+            CliCommand::DeleteStation {
+                station: "Temporary Name".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn parses_playlist_command() {
         assert_eq!(
             CliCommand::from_args(
@@ -556,6 +748,18 @@ mod tests {
         ));
         assert!(matches!(
             CliCommand::from_args(["search"].map(String::from).into_iter()),
+            Err(CliError::Usage)
+        ));
+        assert!(matches!(
+            CliCommand::from_args(
+                ["create-station", "bad", "token"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            Err(CliError::Usage)
+        ));
+        assert!(matches!(
+            CliCommand::from_args(["rename-station", "station"].map(String::from).into_iter()),
             Err(CliError::Usage)
         ));
         assert!(matches!(

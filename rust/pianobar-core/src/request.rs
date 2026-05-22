@@ -655,6 +655,51 @@ mod tests {
     }
 
     #[test]
+    fn station_mutation_requests_use_expected_methods_and_encrypted_bodies() {
+        let rename = builder()
+            .rename_station(RenameStation {
+                station_id: "station-token".to_string(),
+                new_name: "New Name".to_string(),
+            })
+            .unwrap();
+        let delete = builder().delete_station("station-token").unwrap();
+        let create = builder()
+            .create_station(CreateStation {
+                kind: CreateStationKind::MusicToken,
+                token: "R1897".to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(rename.kind, RequestKind::RenameStation);
+        assert!(rename.url_path.contains("method=station.renameStation"));
+        assert!(!rename.post_data.contains("New Name"));
+        assert_eq!(delete.kind, RequestKind::DeleteStation);
+        assert!(delete.url_path.contains("method=station.deleteStation"));
+        assert!(!delete.post_data.contains("station-token"));
+        assert_eq!(create.kind, RequestKind::CreateStation);
+        assert!(create.url_path.contains("method=station.createStation"));
+        assert!(!create.post_data.contains("R1897"));
+    }
+
+    #[test]
+    fn create_station_variants_are_accepted() {
+        for kind in [
+            CreateStationKind::MusicToken,
+            CreateStationKind::Song,
+            CreateStationKind::Artist,
+        ] {
+            let request = builder()
+                .create_station(CreateStation {
+                    kind,
+                    token: "token".to_string(),
+                })
+                .unwrap();
+
+            assert_eq!(request.kind, RequestKind::CreateStation);
+        }
+    }
+
+    #[test]
     fn invalid_rating_is_rejected() {
         let err = builder()
             .add_feedback(AddFeedback {

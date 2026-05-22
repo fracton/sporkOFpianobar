@@ -217,12 +217,19 @@ Current live commands authenticate before running the requested operation::
 	cargo run -p pianobar-cli -- login
 	cargo run -p pianobar-cli -- stations
 	cargo run -p pianobar-cli -- search "Mazzy Star"
+	cargo run -p pianobar-cli -- create-station music R1897
+	cargo run -p pianobar-cli -- rename-station 123456789 "New Station Name"
+	cargo run -p pianobar-cli -- delete-station "New Station Name"
+	cargo run -p pianobar-cli -- station-info "Station Name"
 	cargo run -p pianobar-cli -- playlist "Station Name" high
 	cargo run -p pianobar-cli -- playlist
 
-When no station is passed to ``playlist`` or ``download-first``, the CLI uses
-``autostart_station`` from the config. Station arguments may be station IDs or
-exact station names.
+When no station is passed to ``station-info``, ``playlist``, or
+``download-first``, the CLI uses ``autostart_station`` from the config. Station
+arguments may be station IDs or exact station names.
+
+``delete-station`` is destructive. For tests and smoke checks, only delete a
+station created specifically for that test run.
 
 FAQ
 ---
