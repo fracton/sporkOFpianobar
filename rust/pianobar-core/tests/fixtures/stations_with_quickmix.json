@@ -1,0 +1,26 @@
+{
+  "stat": "ok",
+  "result": {
+    "stations": [
+      {
+        "stationName": "No Surprises Radio",
+        "stationToken": "110995700971499124",
+        "isShared": false
+      },
+      {
+        "stationName": "QuickMix",
+        "stationToken": "119190135772053143",
+        "isQuickMix": true,
+        "quickMixStationIds": [
+          "110995700971499124",
+          "79128555463655993"
+        ]
+      },
+      {
+        "stationName": "Lil Mama Radio",
+        "stationToken": "79128555463655993",
+        "isShared": true
+      }
+    ]
+  }
+}

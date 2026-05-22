@@ -1,0 +1,33 @@
+{
+  "stat": "ok",
+  "result": {
+    "items": [
+      {
+        "adToken": "ignored-ad"
+      },
+      {
+        "artistName": "Cigarettes After Sex",
+        "albumName": "Affection",
+        "songName": "Keep on Loving You",
+        "trackToken": "track-token-1",
+        "stationId": "110995700971499124",
+        "albumArtUrl": "https://img.example/cover.jpg",
+        "songDetailUrl": "https://detail.example/song",
+        "trackGain": -2.25,
+        "trackLength": 244,
+        "songRating": 1,
+        "audioUrlMap": {
+          "highQuality": {
+            "encoding": "aacplus",
+            "audioUrl": "https://audio.example/high.mp4"
+          }
+        }
+      },
+      {
+        "artistName": "Mazzy Star",
+        "songName": "Halah",
+        "trackToken": "track-token-2"
+      }
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "stat": "ok",
+  "result": {
+    "music": {
+      "songs": [
+        {
+          "songName": "Seed Song",
+          "artistName": "Seed Artist",
+          "seedId": "seed-song"
+        }
+      ],
+      "artists": [
+        {
+          "artistName": "Seed Artist",
+          "seedId": "seed-artist"
+        }
+      ]
+    },
+    "feedback": {
+      "thumbsUp": [
+        {
+          "songName": "Loved",
+          "artistName": "Loved Artist",
+          "feedbackId": "feedback-up",
+          "isPositive": true,
+          "trackLength": 180
+        }
+      ],
+      "thumbsDown": [
+        {
+          "songName": "Banned",
+          "artistName": "Banned Artist",
+          "feedbackId": "feedback-down"
+        }
+      ]
+    }
+  }
+}
