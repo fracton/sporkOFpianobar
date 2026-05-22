@@ -1,4 +1,5 @@
 pub mod client;
+pub mod config;
 pub mod crypt;
 pub mod model;
 pub mod request;
@@ -6,6 +7,7 @@ pub mod response;
 pub mod storage;
 
 pub use client::{ClientError, HttpConfig, PandoraClient};
+pub use config::{ConfigError, PianobarConfig};
 pub use model::{
     Artist, AudioFormat, AudioQuality, CreateStationKind, Genre, GenreCategory, Partner,
     SearchResult, Session, Song, SongRating, Station, StationInfo, StationMode, User, UserSettings,
